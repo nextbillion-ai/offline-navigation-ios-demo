@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+._*
+
+# Xcode build products and archives
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.xcarchive
+*.xcresult
+
+# Xcode user-specific state. Keep xcshareddata and shared schemes committed.
+xcuserdata/
+*.xcuserstate
+*.xcsettings
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+
+# Swift Package Manager caches. Package.resolved is intentionally committed for
+# this executable sample so integrators resolve the verified SDK 4.0.0 build.
+.build/
+.swiftpm/
+Packages/
+
+# Local editor, log, and coverage output
+.idea/
+.vscode/
+*.log
+*.profdata
+*.profraw
+coverage/
+
+# Optional local configuration files must never contain committed credentials.
+.env
+.env.*
+!.env.example
+*.local.xcconfig
+Secrets.xcconfig
+
+# Local pre-release binary links are machine-specific. Recreate them with:
+# Scripts/prepare_local_spm.sh /path/to/navigation-ios
+LocalPackages/NextBillionNavigationLocal/Artifacts/*
+!LocalPackages/NextBillionNavigationLocal/Artifacts/.gitkeep

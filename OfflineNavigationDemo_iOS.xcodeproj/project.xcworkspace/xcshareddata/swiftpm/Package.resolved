@@ -1,0 +1,15 @@
+{
+  "originHash" : "fd82198f6ef1cd9f7ad71d6756ffb89a6871069ca27718f0294d3638ad7d171b",
+  "pins" : [
+    {
+      "identity" : "navigation-distribution",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nextbillion-ai/navigation-distribution",
+      "state" : {
+        "revision" : "ea34f7dbefa501cac547998f44e98649cfeff653",
+        "version" : "4.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}
