@@ -728,9 +728,6 @@ Then run:
 The script creates machine-specific symbolic links in `LocalPackages/NextBillionNavigationLocal/Artifacts`. The repository ignores those links. Replace the remote package dependency with the local package in Xcode for the test, and restore the released remote SDK before committing the reference project.
 
 ## 16. Additional documentation
-
-`iOS_Offline_Navigation_Integration_Guide.docx` in the project root provides additional lifecycle, error-handling, and release-checklist information. This README follows the behavior of the current sample, in particular:
-
 - Navigation SDK is version 4.0.0.
 - `fetchRegionLists()` uses the default United States scope.
 - The default route profile is Truck.
