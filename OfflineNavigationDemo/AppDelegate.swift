@@ -19,8 +19,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         self.window = window
 
         // Start initialization early to reduce latency on the first offline screen.
-        // Screens intentionally call initializeOffline() again before their own work:
+        // A screen may call initializeOffline() again as a defensive readiness check:
         // SDK 4.0.0 coalesces concurrent calls and a later call retries a failed startup.
+        // Repeating it before every offline operation is not an integration requirement.
         // Do not call shutdownOffline() when an individual screen disappears; the engine
         // is process-wide and downloads are allowed to continue in the background.
         Task {

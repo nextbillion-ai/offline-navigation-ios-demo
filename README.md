@@ -79,26 +79,34 @@ import NbmapCoreNavigation
 import NbmapNavigation
 ```
 
-For a host project that uses `Package.swift`, use the following dependency and product configuration:
+For a host project that uses `Package.swift`, the following is a complete minimal manifest. Replace the package and target names with names used by the host project:
 
 ```swift
-dependencies: [
-    .package(
-        url: "https://github.com/nextbillion-ai/navigation-distribution",
-        exact: "4.0.0"
-    )
-],
-targets: [
-    .target(
-        name: "YourAppTarget",
-        dependencies: [
-            .product(
-                name: "NbmapNavigation",
-                package: "navigation-distribution"
-            )
-        ]
-    )
-]
+// swift-tools-version: 5.9
+
+import PackageDescription
+
+let package = Package(
+    name: "YourIntegrationPackage",
+    platforms: [.iOS(.v13)],
+    dependencies: [
+        .package(
+            url: "https://github.com/nextbillion-ai/navigation-distribution",
+            exact: "4.0.0"
+        )
+    ],
+    targets: [
+        .target(
+            name: "YourAppTarget",
+            dependencies: [
+                .product(
+                    name: "NbmapNavigation",
+                    package: "navigation-distribution"
+                )
+            ]
+        )
+    ]
+)
 ```
 
 ### 3.2 Configure the API key
@@ -113,6 +121,15 @@ The sample reads the API key from `NBMapAccessKey` in Info.plist:
 Set the map provider and token before creating the first map view or making an online route request:
 
 ```swift
+guard let apiKey = Bundle.main.object(
+    forInfoDictionaryKey: "NBMapAccessKey"
+) as? String,
+      !apiKey.isEmpty,
+      apiKey != "YOUR_NEXTBILLION_API_KEY" else {
+    assertionFailure("Set NBMapAccessKey before using the SDK.")
+    return
+}
+
 NGLAccountManager.use(.tomTom)
 NGLAccountManager.accessToken = apiKey
 ```
@@ -206,7 +223,7 @@ Task {
 }
 ```
 
-Each operation that requires offline functionality should still call `initializeOffline()` before starting. SDK 4.0.0 reuses an in-progress or completed initialization and allows a later call to retry a failed initialization.
+Complete `initializeOffline()` once before the first API that depends on offline functionality. Callers only need to ensure that initialization has completed; they do not need to invoke `initializeOffline()` before every operation. SDK 4.0.0 safely reuses an in-progress or completed initialization, so a feature entry point may call it defensively to coordinate concurrent startup or retry an earlier failure.
 
 ```swift
 try await NBNavigation.initializeOffline()
@@ -225,7 +242,26 @@ Use `waitUntilOfflineInitialized()` only when another code path has already star
 The default data directory is recommended. If the host app has a documented requirement for a custom directory, resolve Application Support from the current sandbox on every launch. Never persist an absolute path that contains a sandbox UUID.
 
 ```swift
-let config = NBNavigation.defaultOfflineInitializeConfig(dataRoot: customDataRoot)
+let fileManager = FileManager.default
+let applicationSupport = try fileManager.url(
+    for: .applicationSupportDirectory,
+    in: .userDomainMask,
+    appropriateFor: nil,
+    create: true
+)
+let dataRootURL = applicationSupport.appendingPathComponent(
+    "NextBillionOffline",
+    isDirectory: true
+)
+try fileManager.createDirectory(
+    at: dataRootURL,
+    withIntermediateDirectories: true,
+    attributes: nil
+)
+
+let config = NBNavigation.defaultOfflineInitializeConfig(
+    dataRoot: dataRootURL.path
+)
 try await NBNavigation.initializeOffline(config: config)
 ```
 
@@ -236,7 +272,6 @@ References: `OfflineNavigationDemo/AppDelegate.swift` and `OfflineNavigationDemo
 Use this sequence on the region screen:
 
 ```swift
-try await NBNavigation.initializeOffline()
 _ = try await NBNavigation.syncOfflineRegionList(syncMode: .auto)
 
 // The default scope is United States, which is intentional in this sample.
@@ -311,7 +346,7 @@ Catalog sizes are estimates. A `nil` value means the corresponding catalog did n
 The sample uses the combined API:
 
 ```swift
-let result = try await NBNavigation.downloadRegion(
+_ = try await NBNavigation.downloadRegion(
     regionId: row.regionId,
     requestTimestampMs: Int64(Date().timeIntervalSince1970 * 1_000),
     onProgress: { _ in }
@@ -387,12 +422,13 @@ Reference: `subscribeToProgress` and `perform` in `OfflineNavigationDemo/Offline
 
 ## 6. Recommend regions by radius or route
 
+`getCountiesInRadius` and `getCountiesAlongRoute` return an `OfflineRegionCatalog` whose `leaves` are routing-region records (`OfflineRegionLeaf`). They identify the routing regions required by the query, but they do not include the map catalog, installed map packages, or a combined Route and Map installation state.
+
 ### 6.1 Radius query
 
 Provide a WGS84 latitude and longitude and a radius in meters:
 
 ```swift
-try await NBNavigation.initializeOffline()
 _ = try await NBNavigation.syncOfflineRegionList(syncMode: .auto)
 
 let catalog = try await NBNavigation.getCountiesInRadius(
@@ -427,7 +463,100 @@ let regions = catalog.leaves
 
 Use the same route profile and vehicle parameters for discovery and final navigation. Otherwise, a Truck route may differ from the route used to select downloadable coverage.
 
-Reference: `OfflineNavigationDemo/OfflineDiscoveryViewController.swift`.
+### 6.3 Join recommendations with Map and installation data
+
+Use `regionId` to join the routing-only recommendations with `fetchRegionLists()`. Synchronize once before the query, fetch the merged snapshot once after receiving the recommendations, and build a lookup dictionary instead of calling the catalog API separately for every region.
+
+```swift
+// recommendedRegions comes from getCountiesInRadius or getCountiesAlongRoute.
+let recommendedRegions: [OfflineRegionLeaf] = catalog.leaves
+
+// Use the same country scope as the rest of the application.
+let listResult = await NBNavigation.fetchRegionLists()
+let rowsByRegionID = listResult.regionRows.reduce(
+    into: [Int64: NBNavigation.OfflineRegionListRow]()
+) { rows, row in
+    rows[row.regionId] = row
+}
+
+for recommendation in recommendedRegions {
+    guard let row = rowsByRegionID[recommendation.regionId] else {
+        // The routing query returned a region that is not present in the current
+        // merged snapshot. Keep the routing result, but do not assume Map data exists.
+        continue
+    }
+
+    let routeCatalogAvailable = row.routeRegion != nil
+    let mapCatalogAvailable = row.mapRegion != nil
+
+    let routeSize = row.routeSizeBytes ?? recommendation.totalSizeBytes
+    let mapSize = row.mapSizeBytes
+
+    let routeInstalled = row.routeRegion?.isDownloaded
+        ?? recommendation.isDownloaded
+    let mapInstalled = row.mapInstalledRegion != nil
+    let mapComplete = row.mapInstalledRegion?.allPackagesOk == true
+    let routeAndMapReady = routeInstalled && mapComplete
+
+    let routeUpdateAvailable = row.routeRegion?.updateAvailable
+        ?? recommendation.updateAvailable
+    let mapUpdateAvailable = row.mapRegion?.updateAvailable == true
+
+    // Enable the combined download only when both catalog components exist.
+    let canDownloadRouteAndMap = routeCatalogAvailable && mapCatalogAvailable
+
+    print(routeSize, mapSize as Any)
+    print(routeInstalled, mapInstalled, routeAndMapReady)
+    print(routeUpdateAvailable, mapUpdateAvailable, canDownloadRouteAndMap)
+}
+```
+
+The merged row provides the following information for a recommended `regionId`:
+
+| Data | Source | Meaning |
+| --- | --- | --- |
+| Routing catalog metadata | `row.routeRegion` | Routing version, size, tile counts, download status, partial state, update state, and bounding box |
+| Map catalog metadata | `row.mapRegion` | Map version, estimated size, tile count, administrative fields, and update state |
+| Installed Map metadata | `row.mapInstalledRegion` | Installed package count, installed bytes, installed version, data source, and package health |
+| Routing size | `row.routeSizeBytes` | Estimated routing download size |
+| Map size | `row.mapSizeBytes` | Estimated map download size |
+| Component errors | `listResult.routeError`, `mapError`, `mapInstalledError` | Explains why one component may be missing while the others are available |
+
+Catalog availability and installation state are different concepts:
+
+| Check | Interpretation |
+| --- | --- |
+| `row.routeRegion != nil` | The routing dataset can be described or downloaded; it does not mean it is installed |
+| `row.mapRegion != nil` | The map dataset can be described or downloaded; it does not mean it is installed |
+| `row.routeRegion?.isDownloaded == true` | Routing data is installed |
+| `row.mapInstalledRegion != nil` | At least one installed map-package record exists |
+| `row.mapInstalledRegion?.allPackagesOk == true` | The installed map dataset is complete and healthy |
+| Routing installed and `allPackagesOk == true` | Both datasets are ready for offline routing and map rendering |
+
+When both catalog components are available, download or update them together with the stable `regionId`:
+
+```swift
+func downloadRouteAndMap(
+    for row: NBNavigation.OfflineRegionListRow
+) async throws {
+    guard row.routeRegion != nil, row.mapRegion != nil else {
+        // Offer a dataset-specific action, or explain which component is unavailable.
+        return
+    }
+
+    _ = try await NBNavigation.downloadRegion(
+        regionId: row.regionId,
+        requestTimestampMs: Int64(Date().timeIntervalSince1970 * 1_000),
+        onProgress: { _ in }
+    )
+}
+```
+
+After a download, update, cancel, or delete operation, call `fetchRegionLists()` again and replace the cached merged row. Combined operations are not transactional, so do not infer final state only from the method returning successfully. Use `observeOfflineRegionProgress` while the transfer is active, then use the refreshed `routeRegion` and `mapInstalledRegion` values as the final stored-state source of truth.
+
+If `routeRegion` or `mapRegion` is missing, keep the available recommendation visible and inspect the component error fields. Use `downloadOfflineRoutingRegion` or `downloadOfflineMapRegion` only when the product intentionally supports a dataset-specific operation; do not pass a routing-only recommendation directly to `downloadRegion` without first verifying the matching Map catalog entry.
+
+References: `startQuery`, `applyRegionMetadata`, and `downloadSelectedTapped` in `OfflineNavigationDemo/OfflineDiscoveryViewController.swift`.
 
 ## 7. Configure offline maps and display installed regions
 
@@ -454,7 +583,7 @@ func mapView(_ mapView: NGLMapView, didFinishLoading style: NGLStyle) {
         mapView: mapView,
         styleURL: mapView.styleURL
     )
-    restoreCustomLayers()
+    // Re-add any application-defined sources and layers here.
 }
 ```
 
@@ -491,9 +620,13 @@ Use cache-only preview when the product needs to verify that a map is rendered e
 
 ```swift
 let status = try await NBNavigation.offlineMapPreviewStatus()
-NBNavigation.enableCacheOnlyPreview(mapView: mapView)
+guard status.previewBundleReady else {
+    // Show a diagnostic message or install the required map packages.
+    return
+}
 
-// Restore normal behavior after the verification flow.
+NBNavigation.enableCacheOnlyPreview(mapView: mapView)
+// Perform the cache-only verification, then restore normal behavior.
 NBNavigation.disableCacheOnlyPreview(mapView: mapView)
 ```
 
@@ -616,12 +749,12 @@ Reference: `OfflineNavigationDemo/DiagnosticsViewController.swift`.
 | Category | API | Sample call site |
 | --- | --- | --- |
 | Global configuration | `setNavigationRuntimeConfig` | [`SDKConfiguration.configure()`](OfflineNavigationDemo/SDKConfiguration.swift#L22) |
-| Initialization | `initializeOffline` | [`AppDelegate`](OfflineNavigationDemo/AppDelegate.swift#L8) and every offline task entry point |
+| Initialization | `initializeOffline` | [`AppDelegate`](OfflineNavigationDemo/AppDelegate.swift#L9), with optional defensive calls at offline feature entry points |
 | Initialization state | `getOfflineInitializationState`, `isOfflineInitialized` | [`DiagnosticsViewController.refresh()`](OfflineNavigationDemo/DiagnosticsViewController.swift#L52) |
 | Catalog synchronization | `syncOfflineRegionList` | [`loadRegions()`](OfflineNavigationDemo/OfflineRegionsViewController.swift#L154), [`startQuery()`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L377) |
 | Merged catalog | `fetchRegionLists` | [`OfflineRegionsViewController`](OfflineNavigationDemo/OfflineRegionsViewController.swift#L178), [`OfflineDiscoveryViewController`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L403), [`RouteDemoViewController`](OfflineNavigationDemo/RouteDemoViewController.swift#L437) |
-| Radius recommendation | `getCountiesInRadius` | [`findRegionsInRadius()`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L315) |
-| Route recommendation | `getCountiesAlongRoute` | [`findRegionsAlongRoute()`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L334) |
+| Radius recommendation | `getCountiesInRadius` | [`findRegionsInRadius()`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L315); returns routing regions that must be joined with `fetchRegionLists` |
+| Route recommendation | `getCountiesAlongRoute` | [`findRegionsAlongRoute()`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L334); returns routing regions that must be joined with `fetchRegionLists` |
 | Combined download | `downloadRegion` | [`OfflineRegionsViewController.perform()`](OfflineNavigationDemo/OfflineRegionsViewController.swift#L366), [`downloadSelectedTapped()`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L486) |
 | Download management | `pauseRegionDownload`, `resumeRegionDownload`, `cancelRegionDownload`, `deleteRegionAllData` | [`OfflineRegionsViewController.perform()`](OfflineNavigationDemo/OfflineRegionsViewController.swift#L366) |
 | Progress | `observeOfflineRegionProgress` | [`OfflineRegionsViewController`](OfflineNavigationDemo/OfflineRegionsViewController.swift#L131), [`OfflineDiscoveryViewController`](OfflineNavigationDemo/OfflineDiscoveryViewController.swift#L258) |
