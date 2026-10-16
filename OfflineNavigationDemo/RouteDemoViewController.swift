@@ -386,6 +386,7 @@ final class RouteDemoViewController: UIViewController {
 
     @objc private func startNavigation() {
         guard !currentRoutes.isEmpty, let options = currentRouteOptions else { return }
+        
         presentNavigation(routes: currentRoutes, options: options)
     }
 
@@ -621,6 +622,7 @@ final class RouteDemoViewController: UIViewController {
             navigationOptions: navigationOptions,
             routeOptions: options
         )
+        navigationOptions.speedViewStyle = .square
         controller.routeLineTracksTraversal = true
         controller.delegate = self
         controller.modalPresentationStyle = .fullScreen

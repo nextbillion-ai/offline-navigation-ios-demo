@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/nextbillion-ai/navigation-distribution",
       "state" : {
-        "revision" : "490c4831ddbc7258b1b5b99d5e769e00fa5deec2",
-        "version" : "4.0.2"
+        "revision" : "3322eb4c5164e60d523297e92d1b82068b0588cf",
+        "version" : "4.1.0"
       }
     }
   ],
